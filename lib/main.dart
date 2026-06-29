@@ -172,7 +172,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     try {
       final now = DateTime.now().millisecondsSinceEpoch;
-      final uri = Uri.parse('$apiUrl?t=$now');
+      final uri = Uri.parse('$apiUrl?t=$now&nocache=${DateTime.now().millisecondsSinceEpoch}');
 
       final response = await http.get(
         uri,
