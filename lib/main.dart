@@ -1,9 +1,11 @@
+
+import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:url_launcher/url_launcher.dart';
 
-const apiUrl = 'https://app.khanger1234.com/api/yusufi-config';
+const String apiUrl = 'https://app.khanger1234.com/wp-json/yusufi/v1/config';
 
 void main() {
   runApp(const YusufiApp());
@@ -15,125 +17,119 @@ class YusufiApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner: false,
       title: 'خدمات یوسفی',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff168a5b)),
-        scaffoldBackgroundColor: const Color(0xfff4f7fb),
+        scaffoldBackgroundColor: const Color(0xfff3f6fb),
       ),
-      home: const HomePage(),
+      home: const Directionality(
+        textDirection: TextDirection.rtl,
+        child: HomePage(),
+      ),
     );
   }
 }
 
-class AppData {
+class AppConfig {
   final String title;
   final String notice;
-  final String exchange;
+  final String exchangeText;
   final String whatsapp;
   final String imo;
-  final List<ServiceData> services;
+  final List<ServiceItem> services;
 
-  AppData({
+  AppConfig({
     required this.title,
     required this.notice,
-    required this.exchange,
+    required this.exchangeText,
     required this.whatsapp,
     required this.imo,
     required this.services,
   });
 
-  factory AppData.def() {
-    return AppData(
+  factory AppConfig.empty() {
+    return AppConfig(
       title: 'خدمات یوسفی',
-      notice: 'به خدمات یوسفی خوش آمدید',
-      exchange: 'یک میلیون تومان مساوی است با ۴۰۰ افغانی',
-      whatsapp: '09331571054',
-      imo: '09051317904',
-      services: const [
-        ServiceData('حواله ایران به افغانستان', true),
-        ServiceData('حواله افغانستان به ایران', true),
-        ServiceData('شارژ ایران و افغانستان', true),
-        ServiceData('کارت به کارت ایران', true),
-        ServiceData('خدمات بازی و پابجی', true),
-        ServiceData('VPN و فیلترشکن', true),
-      ],
+      notice: 'در حال دریافت اطلاعات از پنل...',
+      exchangeText: 'در حال دریافت نرخ ارز...',
+      whatsapp: '',
+      imo: '',
+      services: const [],
     );
   }
 
-  factory AppData.fromJson(Map<String, dynamic> json) {
-    final d = AppData.def();
-    final m = json['data'] is Map<String, dynamic>
-        ? json['data'] as Map<String, dynamic>
-        : json['config'] is Map<String, dynamic>
-            ? json['config'] as Map<String, dynamic>
-            : json;
-
-    return AppData(
-      title: text(m, ['app_title', 'title', 'name'], d.title),
-      notice: text(m, ['notice', 'message', 'home_notice'], d.notice),
-      exchange: text(
-          m,
-          ['exchange_text', 'exchange', 'rate_text', 'exchange_rate'],
-          d.exchange),
-      whatsapp: text(
-          m, ['whatsapp', 'whatsapp_number', 'support_whatsapp'], d.whatsapp),
-      imo: text(m, ['imo', 'imo_number', 'support_imo'], d.imo),
-      services: readServices(m['services'], d.services),
-    );
-  }
-
-  static String text(
-      Map<String, dynamic> m, List<String> keys, String fallback) {
-    for (final k in keys) {
-      final v = m[k];
-      if (v != null && v.toString().trim().isNotEmpty)
-        return v.toString().trim();
+  factory AppConfig.fromJson(Map<String, dynamic> json) {
+    String pick(List<String> keys, String fallback) {
+      for (final key in keys) {
+        final value = json[key];
+        if (value != null && value.toString().trim().isNotEmpty) {
+          return value.toString();
+        }
+      }
+      return fallback;
     }
-    return fallback;
-  }
 
-  static List<ServiceData> readServices(
-      dynamic value, List<ServiceData> fallback) {
-    final out = <ServiceData>[];
+    final list = <ServiceItem>[];
+    final rawServices = json['services'];
 
-    if (value is List) {
-      for (final item in value) {
-        if (item is Map) {
-          final name =
-              (item['name'] ?? item['title'] ?? item['label'] ?? '').toString();
-          final enabled = item['enabled'] == false || item['active'] == false
-              ? false
-              : true;
-          if (name.trim().isNotEmpty)
-            out.add(ServiceData(name.trim(), enabled));
-        } else {
-          final name = item.toString().trim();
-          if (name.isNotEmpty) out.add(ServiceData(name, true));
+    if (rawServices is List) {
+      for (final item in rawServices) {
+        final service = ServiceItem.fromJson(item);
+        if (service.name.trim().isNotEmpty && service.enabled) {
+          list.add(service);
         }
       }
     }
 
-    if (value is Map) {
-      value.forEach((key, val) {
-        if (val is Map) {
-          final name = (val['name'] ?? val['title'] ?? key).toString();
-          final enabled =
-              val['enabled'] == false || val['active'] == false ? false : true;
-          out.add(ServiceData(name, enabled));
-        }
-      });
-    }
-
-    return out.isEmpty ? fallback : out;
+    return AppConfig(
+      title: pick(['title', 'app_title', 'appTitle'], 'خدمات یوسفی'),
+      notice: pick(['notice', 'message', 'app_notice'], 'به خدمات یوسفی خوش آمدید'),
+      exchangeText: pick(
+        ['exchange_text', 'exchange', 'exchangeText', 'rate_text', 'rateText'],
+        'نرخ ارز دریافت نشد',
+      ),
+      whatsapp: pick(['whatsapp', 'whatsapp_number'], ''),
+      imo: pick(['imo', 'imo_number'], ''),
+      services: list,
+    );
   }
 }
 
-class ServiceData {
+class ServiceItem {
   final String name;
   final bool enabled;
-  const ServiceData(this.name, this.enabled);
+
+  ServiceItem({
+    required this.name,
+    required this.enabled,
+  });
+
+  factory ServiceItem.fromJson(dynamic item) {
+    if (item is String) {
+      return ServiceItem(name: item, enabled: true);
+    }
+
+    if (item is Map) {
+      final name = (item['name'] ?? item['title'] ?? item['label'] ?? '').toString();
+
+      final rawEnabled = item['enabled'] ?? item['active'] ?? item['is_active'] ?? true;
+      bool enabled = true;
+
+      if (rawEnabled is bool) {
+        enabled = rawEnabled;
+      } else if (rawEnabled is num) {
+        enabled = rawEnabled != 0;
+      } else if (rawEnabled is String) {
+        final v = rawEnabled.toLowerCase().trim();
+        enabled = !(v == '0' || v == 'false' || v == 'off' || v == 'no' || v == 'غیرفعال');
+      }
+
+      return ServiceItem(name: name, enabled: enabled);
+    }
+
+    return ServiceItem(name: '', enabled: false);
+  }
 }
 
 class HomePage extends StatefulWidget {
@@ -143,222 +139,214 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  AppData data = AppData.def();
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  AppConfig config = AppConfig.empty();
   bool loading = true;
-  String error = '';
+  String errorText = '';
 
   @override
   void initState() {
     super.initState();
-    loadData();
+    WidgetsBinding.instance.addObserver(this);
+    loadConfig();
   }
 
-  Future<void> loadData() async {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      loadConfig();
+    }
+  }
+
+  Future<void> loadConfig() async {
     setState(() {
       loading = true;
-      error = '';
+      errorText = '';
     });
 
     try {
-      final res = await http
-          .get(Uri.parse(apiUrl))
-          .timeout(const Duration(seconds: 12));
-      final decoded = jsonDecode(utf8.decode(res.bodyBytes));
-      if (decoded is Map<String, dynamic>) {
-        data = AppData.fromJson(decoded);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final uri = Uri.parse('$apiUrl?t=$now');
+
+      final response = await http.get(
+        uri,
+        headers: const {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        throw Exception('API empty');
       }
+
+      final body = utf8.decode(response.bodyBytes);
+      final decoded = jsonDecode(body);
+
+      if (decoded is! Map) {
+        throw Exception('Invalid JSON');
+      }
+
+      setState(() {
+        config = AppConfig.fromJson(Map<String, dynamic>.from(decoded));
+        loading = false;
+        errorText = '';
+      });
     } catch (_) {
-      error = 'اتصال به پنل برقرار نشد؛ اطلاعات پیش‌فرض نمایش داده شد.';
+      setState(() {
+        loading = false;
+        errorText = 'اتصال با پنل برقرار نشد';
+      });
     }
-
-    setState(() {
-      loading = false;
-    });
-  }
-
-  String phoneForWhatsApp(String p) {
-    var n = p.replaceAll(RegExp(r'[^0-9]'), '');
-    if (n.startsWith('0')) n = '98${n.substring(1)}';
-    return n;
-  }
-
-  Future<void> openWhatsApp(String service) async {
-    final phone = phoneForWhatsApp(data.whatsapp);
-    final msg = Uri.encodeComponent('سلام، برای $service درخواست دارم.');
-    final uri = Uri.parse('https://wa.me/$phone?text=$msg');
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-  }
-
-  void openService(ServiceData s) {
-    if (!s.enabled) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('این خدمت فعلاً غیرفعال است')),
-      );
-      return;
-    }
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: Container(
-          margin: const EdgeInsets.all(12),
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-              color: Colors.white, borderRadius: BorderRadius.circular(26)),
-          child: SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(s.name,
-                    style: const TextStyle(
-                        fontSize: 20, fontWeight: FontWeight.w900)),
-                const SizedBox(height: 12),
-                Text('واتساپ: ${data.whatsapp}'),
-                const SizedBox(height: 6),
-                Text('ایمو: ${data.imo}'),
-                const SizedBox(height: 18),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => openWhatsApp(s.name),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xff168a5b),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.all(14),
-                    ),
-                    child: const Text('ارسال درخواست در واتساپ'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        body: RefreshIndicator(
-          onRefresh: loadData,
-          child: ListView(
-            padding: EdgeInsets.zero,
-            children: [
-              Container(
-                padding: const EdgeInsets.fromLTRB(18, 55, 18, 28),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xff106d49), Color(0xff1fb878)],
-                    begin: Alignment.topRight,
-                    end: Alignment.bottomLeft,
+    return Scaffold(
+      body: RefreshIndicator(
+        onRefresh: loadConfig,
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            Header(title: config.title),
+            const SizedBox(height: 26),
+
+            InfoCard(
+              text: config.exchangeText,
+              icon: Icons.currency_exchange_rounded,
+              iconColor: const Color(0xff11875d),
+            ),
+
+            const SizedBox(height: 16),
+
+            InfoCard(
+              text: config.notice,
+              icon: Icons.campaign_rounded,
+              iconColor: Colors.orange,
+            ),
+
+            if (loading)
+              const Padding(
+                padding: EdgeInsets.only(top: 18),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+
+            if (errorText.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 18, 24, 0),
+                child: Text(
+                  errorText,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.red,
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
                   ),
-                  borderRadius: BorderRadius.only(
-                    bottomLeft: Radius.circular(34),
-                    bottomRight: Radius.circular(34),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.account_balance_wallet_rounded,
-                        color: Colors.white, size: 42),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        data.title,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 25,
-                            fontWeight: FontWeight.w900),
-                      ),
-                    ),
-                    if (loading)
-                      const CircularProgressIndicator(color: Colors.white),
-                  ],
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    if (error.isNotEmpty)
-                      card(Text(error,
-                          style: const TextStyle(
-                              color: Colors.red, fontWeight: FontWeight.bold))),
-                    card(Row(
-                      children: [
-                        const Icon(Icons.currency_exchange,
-                            color: Color(0xff168a5b)),
-                        const SizedBox(width: 10),
-                        Expanded(
-                            child: Text(data.exchange,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w900))),
-                      ],
-                    )),
-                    card(Row(
-                      children: [
-                        const Icon(Icons.campaign, color: Colors.orange),
-                        const SizedBox(width: 10),
-                        Expanded(
-                            child: Text(data.notice,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold))),
-                      ],
-                    )),
-                    const SizedBox(height: 8),
-                    const Align(
-                      alignment: Alignment.centerRight,
-                      child: Text('خدمات',
-                          style: TextStyle(
-                              fontSize: 21, fontWeight: FontWeight.w900)),
-                    ),
-                    const SizedBox(height: 12),
-                    GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: data.services.length,
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        mainAxisSpacing: 12,
-                        crossAxisSpacing: 12,
-                        childAspectRatio: 1.15,
-                      ),
-                      itemBuilder: (_, i) {
-                        final s = data.services[i];
-                        return GestureDetector(
-                          onTap: () => openService(s),
-                          child: Opacity(
-                            opacity: s.enabled ? 1 : .45,
-                            child: Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: box(),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Icon(Icons.apps_rounded,
-                                      color: Color(0xff168a5b), size: 36),
-                                  const Spacer(),
-                                  Text(s.name,
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.w900,
-                                          fontSize: 15)),
-                                  const SizedBox(height: 6),
-                                  Text(s.enabled ? 'فعال' : 'غیرفعال'),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
+
+            const Padding(
+              padding: EdgeInsets.fromLTRB(28, 34, 28, 16),
+              child: Text(
+                'خدمات',
+                style: TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xff222222),
+                ),
+              ),
+            ),
+
+            if (config.services.isEmpty && !loading)
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  'خدمتی از پنل دریافت نشد',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 18),
+                ),
+              ),
+
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: GridView.builder(
+                itemCount: config.services.length,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 18,
+                  crossAxisSpacing: 14,
+                  childAspectRatio: 1.04,
+                ),
+                itemBuilder: (context, index) {
+                  return ServiceCard(service: config.services[index]);
+                },
+              ),
+            ),
+
+            const SizedBox(height: 34),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class Header extends StatelessWidget {
+  final String title;
+
+  const Header({
+    super.key,
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 190,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Color(0xff15c983),
+            Color(0xff08784f),
+          ],
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+        ),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(46),
+          bottomRight: Radius.circular(46),
+        ),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 34),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.account_balance_wallet_rounded,
+                color: Colors.white,
+                size: 56,
+              ),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
             ],
@@ -367,27 +355,110 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
 
-  Widget card(Widget child) {
+class InfoCard extends StatelessWidget {
+  final String text;
+  final IconData icon;
+  final Color iconColor;
+
+  const InfoCard({
+    super.key,
+    required this.text,
+    required this.icon,
+    required this.iconColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: box(),
-      child: child,
+      margin: const EdgeInsets.symmetric(horizontal: 28),
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 22),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 22,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: iconColor, size: 36),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(
+              text,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 21,
+                fontWeight: FontWeight.w800,
+                color: Color(0xff1f1f1f),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
+}
 
-  BoxDecoration box() {
-    return BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(24),
-      boxShadow: [
-        BoxShadow(
-            color: Colors.black.withOpacity(.05),
-            blurRadius: 16,
-            offset: const Offset(0, 8))
-      ],
+class ServiceCard extends StatelessWidget {
+  final ServiceItem service;
+
+  const ServiceCard({
+    super.key,
+    required this.service,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.035),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          const Icon(
+            Icons.grid_view_rounded,
+            color: Color(0xff11875d),
+            size: 36,
+          ),
+          const Spacer(),
+          Text(
+            service.name,
+            textAlign: TextAlign.right,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 21,
+              fontWeight: FontWeight.w900,
+              color: Color(0xff111111),
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'فعال',
+            style: TextStyle(
+              fontSize: 18,
+              color: Color(0xff222222),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
