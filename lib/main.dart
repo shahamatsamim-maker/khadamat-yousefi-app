@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
-const apiUrl = 'https://app.khanger1234.com/wp-json/yusufi/v1/config';
+const apiUrl = 'https://app.khanger1234.com/api/yusufi-config';
 
 void main() {
   runApp(const YusufiApp());
