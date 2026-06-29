@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-const String apiUrl = 'https://app.khanger1234.com/wp-json/yusufi/v1/config';
+const String apiUrl = 'https://app.khanger1234.com/wp-json/yusufi/v6/config';
 
 void main() {
   runApp(const YusufiApp());
