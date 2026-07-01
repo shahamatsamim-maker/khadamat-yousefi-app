@@ -1,11 +1,10 @@
-
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-const String apiUrl = 'https://app.khanger1234.com/wp-json/yusufi/v6/config';
+const String yusufiApiBaseUrl = 'https://app.khanger1234.com/yusufi-api.php';
 
 void main() {
   runApp(const YusufiApp());
@@ -21,114 +20,13 @@ class YusufiApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xfff3f6fb),
+        fontFamily: 'sans',
       ),
       home: const Directionality(
         textDirection: TextDirection.rtl,
         child: HomePage(),
       ),
     );
-  }
-}
-
-class AppConfig {
-  final String title;
-  final String notice;
-  final String exchangeText;
-  final String whatsapp;
-  final String imo;
-  final List<ServiceItem> services;
-
-  AppConfig({
-    required this.title,
-    required this.notice,
-    required this.exchangeText,
-    required this.whatsapp,
-    required this.imo,
-    required this.services,
-  });
-
-  factory AppConfig.empty() {
-    return AppConfig(
-      title: 'خدمات یوسفی',
-      notice: 'در حال دریافت اطلاعات از پنل...',
-      exchangeText: 'در حال دریافت نرخ ارز...',
-      whatsapp: '',
-      imo: '',
-      services: const [],
-    );
-  }
-
-  factory AppConfig.fromJson(Map<String, dynamic> json) {
-    String pick(List<String> keys, String fallback) {
-      for (final key in keys) {
-        final value = json[key];
-        if (value != null && value.toString().trim().isNotEmpty) {
-          return value.toString();
-        }
-      }
-      return fallback;
-    }
-
-    final list = <ServiceItem>[];
-    final rawServices = json['services'];
-
-    if (rawServices is List) {
-      for (final item in rawServices) {
-        final service = ServiceItem.fromJson(item);
-        if (service.name.trim().isNotEmpty && service.enabled) {
-          list.add(service);
-        }
-      }
-    }
-
-    return AppConfig(
-      title: pick(['title', 'app_title', 'appTitle'], 'خدمات یوسفی'),
-      notice: pick(['notice', 'message', 'app_notice'], 'به خدمات یوسفی خوش آمدید'),
-      exchangeText: pick(
-        ['exchange_text', 'exchange', 'exchangeText', 'rate_text', 'rateText'],
-        'نرخ ارز دریافت نشد',
-      ),
-      whatsapp: pick(['whatsapp', 'whatsapp_number'], ''),
-      imo: pick(['imo', 'imo_number'], ''),
-      services: list,
-    );
-  }
-}
-
-class ServiceItem {
-  final String name;
-  final bool enabled;
-
-  ServiceItem({
-    required this.name,
-    required this.enabled,
-  });
-
-  factory ServiceItem.fromJson(dynamic item) {
-    if (item is String) {
-      return ServiceItem(name: item, enabled: true);
-    }
-
-    if (item is Map) {
-      final name = (item['name'] ?? item['title'] ?? item['label'] ?? '').toString();
-
-      final rawEnabled = item['enabled'] ?? item['active'] ?? item['is_active'] ?? true;
-      bool enabled = true;
-
-      if (rawEnabled is bool) {
-        enabled = rawEnabled;
-      } else if (rawEnabled is num) {
-        enabled = rawEnabled != 0;
-      } else if (rawEnabled is String) {
-        final v = rawEnabled.toLowerCase().trim();
-        enabled = !(v == '0' || v == 'false' || v == 'off' || v == 'no' || v == 'غیرفعال');
-      }
-
-      return ServiceItem(name: name, enabled: enabled);
-    }
-
-    return ServiceItem(name: '', enabled: false);
   }
 }
 
@@ -140,9 +38,10 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
-  AppConfig config = AppConfig.empty();
+  YusufiConfig? config;
   bool loading = true;
-  String errorText = '';
+  String? error;
+  DateTime? lastUpdate;
 
   @override
   void initState() {
@@ -157,25 +56,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  // هر بار برنامه دوباره باز شود یا از بک‌گراند برگردد، API تازه خوانده می‌شود.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      loadConfig();
+      loadConfig(silent: true);
     }
   }
 
-  Future<void> loadConfig() async {
-    setState(() {
-      loading = true;
-      errorText = '';
-    });
+  Future<void> loadConfig({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        loading = true;
+        error = null;
+      });
+    }
+
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final url = Uri.parse('$yusufiApiBaseUrl?t=$ts');
 
     try {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final uri = Uri.parse('$apiUrl?t=$now&nocache=${DateTime.now().millisecondsSinceEpoch}');
-
-      final response = await http.get(
-        uri,
+      final res = await http.get(
+        url,
         headers: const {
           'Accept': 'application/json',
           'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -184,116 +86,357 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         },
       ).timeout(const Duration(seconds: 15));
 
-      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        throw Exception('API empty');
+      if (res.statusCode != 200) {
+        throw Exception('HTTP ${res.statusCode}');
       }
 
-      final body = utf8.decode(response.bodyBytes);
-      final decoded = jsonDecode(body);
+      if (res.body.trim().isEmpty) {
+        throw Exception('API_EMPTY_RESPONSE');
+      }
 
+      final decoded = jsonDecode(res.body);
       if (decoded is! Map) {
-        throw Exception('Invalid JSON');
+        throw Exception('API_INVALID_JSON');
       }
 
+      final next = YusufiConfig.fromJson(decoded.cast<String, dynamic>());
+
       setState(() {
-        config = AppConfig.fromJson(Map<String, dynamic>.from(decoded));
+        config = next;
         loading = false;
-        errorText = '';
+        error = null;
+        lastUpdate = DateTime.now();
       });
-    } catch (_) {
+    } catch (e) {
       setState(() {
         loading = false;
-        errorText = 'اتصال با پنل برقرار نشد';
+        error = 'اتصال به پنل برقرار نشد: $e';
       });
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final c = config;
+
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: loadConfig,
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            Header(title: config.title),
-            const SizedBox(height: 26),
-
-            InfoCard(
-              text: config.exchangeText,
-              icon: Icons.currency_exchange_rounded,
-              iconColor: const Color(0xff11875d),
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+            colors: [
+              Color(0xFF0F766E),
+              Color(0xFF134E4A),
+              Color(0xFF052E2B),
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: RefreshIndicator(
+            onRefresh: () => loadConfig(),
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              children: [
+                HeaderCard(
+                  title: c?.appTitle ?? 'خدمات یوسفی',
+                  notice: c?.notice ?? 'در حال دریافت اطلاعات از پنل...',
+                  lastUpdate: lastUpdate,
+                  onRefresh: () => loadConfig(),
+                ),
+                const SizedBox(height: 14),
+                if (loading && c == null) const LoadingCard(),
+                if (error != null)
+                  ErrorCard(
+                    message: error!,
+                    onRetry: () => loadConfig(),
+                  ),
+                if (c != null) ...[
+                  InfoCard(
+                    icon: Icons.currency_exchange,
+                    title: 'نرخ / اطلاعیه',
+                    value: c.exchangeText,
+                  ),
+                  const SizedBox(height: 12),
+                  SupportCard(
+                    whatsapp: c.whatsapp,
+                    imo: c.imo,
+                  ),
+                  const SizedBox(height: 12),
+                  ServicesCard(services: c.services),
+                  const SizedBox(height: 12),
+                  ApiStatusCard(config: c),
+                ],
+                const SizedBox(height: 24),
+                const Center(
+                  child: Text(
+                    'اطلاعات این برنامه مستقیم از پنل مادر خوانده می‌شود',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ),
+              ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
-            const SizedBox(height: 16),
+class YusufiConfig {
+  final bool success;
+  final String appTitle;
+  final String notice;
+  final String exchangeText;
+  final String whatsapp;
+  final String imo;
+  final String endpoint;
+  final bool dynamicLink;
+  final List<YusufiService> services;
 
-            InfoCard(
-              text: config.notice,
-              icon: Icons.campaign_rounded,
-              iconColor: Colors.orange,
-            ),
+  const YusufiConfig({
+    required this.success,
+    required this.appTitle,
+    required this.notice,
+    required this.exchangeText,
+    required this.whatsapp,
+    required this.imo,
+    required this.endpoint,
+    required this.dynamicLink,
+    required this.services,
+  });
 
-            if (loading)
-              const Padding(
-                padding: EdgeInsets.only(top: 18),
-                child: Center(child: CircularProgressIndicator()),
+  factory YusufiConfig.fromJson(Map<String, dynamic> json) {
+    final rawOptions = asMap(json['raw_options']);
+
+    final services = <YusufiService>[];
+    final seen = <String>{};
+
+    void addService(String key, String name, bool enabled) {
+      final cleanName = name.trim();
+      final cleanKey = key.trim().isEmpty ? cleanName : key.trim();
+
+      if (cleanName.isEmpty) return;
+      if (!enabled) return;
+      if (seen.contains(cleanKey)) return;
+
+      seen.add(cleanKey);
+      services.add(YusufiService(
+        key: cleanKey,
+        name: cleanName,
+        enabled: enabled,
+      ));
+    }
+
+    void readList(dynamic source) {
+      if (source is! List) return;
+
+      for (final item in source) {
+        if (item is String) {
+          addService(item, item, true);
+        } else if (item is Map) {
+          final m = item.map((k, v) => MapEntry(k.toString(), v));
+          final name = '${m['name'] ?? m['title'] ?? m['label'] ?? ''}';
+          final key = '${m['key'] ?? name}';
+          final enabled = readBool(m['enabled'] ?? m['is_enabled'], true);
+          addService(key, name, enabled);
+        }
+      }
+    }
+
+    readList(rawOptions['yusufi_services']);
+    readList(json['yusufi_services']);
+    readList(json['services']);
+    readList(json['modules']);
+
+    if (services.isEmpty) {
+      addService('transfer', 'حواله ایران ↔ افغانستان', true);
+      addService('mobile', 'شارژ موبایل', true);
+      addService('vpn', 'خدمات VPN', true);
+      addService('game', 'خدمات بازی PUBG / UC', true);
+      addService('support', 'پشتیبانی آنلاین', true);
+    }
+
+    return YusufiConfig(
+      success: readBool(json['success'], true),
+      appTitle: readString(
+        json,
+        rawOptions,
+        ['app_title', 'title', 'yusufi_app_title'],
+        'خدمات یوسفی',
+      ),
+      notice: readString(
+        json,
+        rawOptions,
+        ['notice', 'message', 'yusufi_notice'],
+        'به اپ خدمات یوسفی خوش آمدید',
+      ),
+      exchangeText: readString(
+        json,
+        rawOptions,
+        ['exchange_text', 'exchange', 'rate_text', 'yusufi_exchange_text'],
+        'نرخ هنوز از پنل تنظیم نشده است',
+      ),
+      whatsapp: readString(
+        json,
+        rawOptions,
+        ['whatsapp', 'support_whatsapp', 'yusufi_whatsapp'],
+        '',
+      ),
+      imo: readString(
+        json,
+        rawOptions,
+        ['imo', 'support_imo', 'yusufi_imo'],
+        '',
+      ),
+      endpoint: '${json['endpoint'] ?? ''}',
+      dynamicLink: readBool(json['dynamic_link'], false),
+      services: services,
+    );
+  }
+
+  static Map<String, dynamic> asMap(dynamic value) {
+    if (value is Map) {
+      return value.map((k, v) => MapEntry(k.toString(), v));
+    }
+    return {};
+  }
+
+  static bool readBool(dynamic value, bool fallback) {
+    if (value == null) return fallback;
+    if (value is bool) return value;
+
+    final text = value.toString().trim().toLowerCase();
+
+    if (text == '1' || text == 'true' || text == 'yes' || text == 'on') {
+      return true;
+    }
+
+    if (text == '0' || text == 'false' || text == 'no' || text == 'off') {
+      return false;
+    }
+
+    return fallback;
+  }
+
+  static String readString(
+    Map<String, dynamic> root,
+    Map<String, dynamic> options,
+    List<String> keys,
+    String fallback,
+  ) {
+    for (final key in keys) {
+      final v1 = root[key];
+      if (v1 != null && v1.toString().trim().isNotEmpty) {
+        return v1.toString();
+      }
+
+      final v2 = options[key];
+      if (v2 != null && v2.toString().trim().isNotEmpty) {
+        return v2.toString();
+      }
+    }
+
+    return fallback;
+  }
+}
+
+class YusufiService {
+  final String key;
+  final String name;
+  final bool enabled;
+
+  const YusufiService({
+    required this.key,
+    required this.name,
+    required this.enabled,
+  });
+}
+
+class HeaderCard extends StatelessWidget {
+  final String title;
+  final String notice;
+  final DateTime? lastUpdate;
+  final VoidCallback onRefresh;
+
+  const HeaderCard({
+    super.key,
+    required this.title,
+    required this.notice,
+    required this.lastUpdate,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final timeText = lastUpdate == null
+        ? 'در حال دریافت'
+        : '${lastUpdate!.hour.toString().padLeft(2, '0')}:${lastUpdate!.minute.toString().padLeft(2, '0')}';
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const CircleAvatar(
+                radius: 24,
+                backgroundColor: Colors.white,
+                child: Icon(Icons.apps, color: Color(0xFF0F766E)),
               ),
-
-            if (errorText.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 18, 24, 0),
+              const SizedBox(width: 12),
+              Expanded(
                 child: Text(
-                  errorText,
-                  textAlign: TextAlign.center,
+                  title,
                   style: const TextStyle(
-                    color: Colors.red,
-                    fontSize: 17,
+                    color: Colors.white,
+                    fontSize: 23,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
-
-            const Padding(
-              padding: EdgeInsets.fromLTRB(28, 34, 28, 16),
-              child: Text(
-                'خدمات',
-                style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w900,
-                  color: Color(0xff222222),
-                ),
+              IconButton(
+                onPressed: onRefresh,
+                icon: const Icon(Icons.refresh, color: Colors.white),
               ),
-            ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            notice,
+            style: const TextStyle(color: Colors.white, fontSize: 15),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'آخرین دریافت از پنل: $timeText',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
-            if (config.services.isEmpty && !loading)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'خدمتی از پنل دریافت نشد',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 18),
-                ),
-              ),
+class LoadingCard extends StatelessWidget {
+  const LoadingCard({super.key});
 
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18),
-              child: GridView.builder(
-                itemCount: config.services.length,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 18,
-                  crossAxisSpacing: 14,
-                  childAspectRatio: 1.04,
-                ),
-                itemBuilder: (context, index) {
-                  return ServiceCard(service: config.services[index]);
-                },
-              ),
-            ),
-
-            const SizedBox(height: 34),
+  @override
+  Widget build(BuildContext context) {
+    return const Card(
+      child: Padding(
+        padding: EdgeInsets.all(20),
+        child: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Expanded(child: Text('در حال خواندن اطلاعات از پنل...')),
           ],
         ),
       ),
@@ -301,56 +444,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 }
 
-class Header extends StatelessWidget {
-  final String title;
+class ErrorCard extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
 
-  const Header({
+  const ErrorCard({
     super.key,
-    required this.title,
+    required this.message,
+    required this.onRetry,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 190,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            Color(0xff15c983),
-            Color(0xff08784f),
+    return Card(
+      color: Colors.red.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('خطا در اتصال',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text(message),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('تلاش دوباره'),
+            ),
           ],
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-        ),
-        borderRadius: BorderRadius.only(
-          bottomLeft: Radius.circular(46),
-          bottomRight: Radius.circular(46),
-        ),
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 34),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.account_balance_wallet_rounded,
-                color: Colors.white,
-                size: 56,
-              ),
-              const SizedBox(width: 18),
-              Expanded(
-                child: Text(
-                  title,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 32,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );
@@ -358,106 +481,166 @@ class Header extends StatelessWidget {
 }
 
 class InfoCard extends StatelessWidget {
-  final String text;
   final IconData icon;
-  final Color iconColor;
+  final String title;
+  final String value;
 
   const InfoCard({
     super.key,
-    required this.text,
     required this.icon,
-    required this.iconColor,
+    required this.title,
+    required this.value,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 28),
-      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 22),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 22,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: iconColor, size: 36),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              text,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 21,
-                fontWeight: FontWeight.w800,
-                color: Color(0xff1f1f1f),
-              ),
-            ),
-          ),
-        ],
+    return Card(
+      elevation: 0,
+      child: ListTile(
+        leading: Icon(icon, color: const Color(0xFF0F766E)),
+        title: Text(title),
+        subtitle: Text(
+          value,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
       ),
     );
   }
 }
 
-class ServiceCard extends StatelessWidget {
-  final ServiceItem service;
+class SupportCard extends StatelessWidget {
+  final String whatsapp;
+  final String imo;
 
-  const ServiceCard({
+  const SupportCard({
     super.key,
-    required this.service,
+    required this.whatsapp,
+    required this.imo,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.035),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
+    return Card(
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('پشتیبانی',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            SupportRow(
+              icon: Icons.chat,
+              label: 'واتساپ',
+              value: whatsapp.isEmpty ? 'از پنل تنظیم نشده' : whatsapp,
+            ),
+            const SizedBox(height: 8),
+            SupportRow(
+              icon: Icons.phone_in_talk,
+              label: 'ایمو',
+              value: imo.isEmpty ? 'از پنل تنظیم نشده' : imo,
+            ),
+          ],
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          const Icon(
-            Icons.grid_view_rounded,
-            color: Color(0xff11875d),
-            size: 36,
-          ),
-          const Spacer(),
-          Text(
-            service.name,
-            textAlign: TextAlign.right,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 21,
-              fontWeight: FontWeight.w900,
-              color: Color(0xff111111),
-            ),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'فعال',
-            style: TextStyle(
-              fontSize: 18,
-              color: Color(0xff222222),
-            ),
-          ),
-        ],
+    );
+  }
+}
+
+class SupportRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+
+  const SupportRow({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: const Color(0xFF0F766E)),
+        const SizedBox(width: 8),
+        Text('$label: ', style: const TextStyle(fontWeight: FontWeight.bold)),
+        Expanded(child: Text(value)),
+      ],
+    );
+  }
+}
+
+class ServicesCard extends StatelessWidget {
+  final List<YusufiService> services;
+
+  const ServicesCard({
+    super.key,
+    required this.services,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('خدمات فعال',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            for (final service in services)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F766E).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.check_circle, color: Color(0xFF0F766E)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        service.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ApiStatusCard extends StatelessWidget {
+  final YusufiConfig config;
+
+  const ApiStatusCard({
+    super.key,
+    required this.config,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      child: ListTile(
+        leading: const Icon(Icons.cloud_done, color: Color(0xFF0F766E)),
+        title: const Text('وضعیت اتصال پنل'),
+        subtitle: Text(
+          config.dynamicLink
+              ? 'اتصال داینامیک فعال است'
+              : 'اتصال برقرار است، اما dynamic_link در JSON دیده نشد',
+        ),
       ),
     );
   }
